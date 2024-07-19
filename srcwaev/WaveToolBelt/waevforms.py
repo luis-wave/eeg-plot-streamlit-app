@@ -1,5 +1,3 @@
-import streamlit as st
-
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -20,12 +18,11 @@ from mywaveanalytics.libraries import (
 )
 
 
-
 """
 Load the EEG data from a file
 """
-@st.cache_data
-def get_data_from_file_path(path, get_dict=False, picks=None):
+def get_data_from_file_path(path, get_dict=True):
+    print(f"THE PATH ->>{path}<<")
     ext = str(Path(path).suffix)
 
     if ext.lower() == ".dat": eeg_type = 0
@@ -50,40 +47,15 @@ def get_data_from_file_path(path, get_dict=False, picks=None):
         return eeg_dict
     else: 
         return raw_mwa
-    
-"""
-Load the EEG data from mwa object
-"""
-# @st.cache_data
-def get_data_from_mw_object(mw_object, get_dict=False, picks=None):
-    raw_mwa = mw_object.eeg
-
-    # raw_mwa = apply_waev_filter(raw_mwa, lowf=0.5)
-    raw_mwa, _ = apply_fir_filter(
-        raw_mwa, 
-        fs=raw_mwa.info['sfreq'], 
-        zero_phase_delay=True, 
-        filter_eog=False
-    )
-
-    raw_mwa = raw_mwa.resample(128.0)
-    # raw_np = raw.get_data(picks=picks)
-
-    if get_dict is True:
-        eeg_dict = get_referenced_data(raw_mwa)
-        return eeg_dict
-    else: 
-        return raw_mwa
 
 """
 All EEG data needed
 """
-
 def get_referenced_data(raw_mwa=None):
     if raw_mwa is not None:
         raw_a1a2 = order_montage_channels(raw_mwa.copy(), "a1a2")
         raw_cz = order_montage_channels(references.centroid(raw_mwa.copy()), "cz")
-        raw_bpt = bipolar_transverse(raw_mwa.copy())
+        raw_bpt = references.bipolar_transverse(raw_mwa.copy())
         raw_tcp = references.temporal_central_parasagittal(raw_mwa.copy())
         raw_avg = order_montage_channels(references.average(raw_mwa.copy()), "avg")
         raw_ref = order_montage_channels(references.infinite_rest(raw_mwa.copy()), "ref")
@@ -242,20 +214,6 @@ def raw_to_df(raw=None):
     return df
 
 
-@st.cache_data
-def normalize_dataframe(df, exclude_column="Time"):
-    # Function to normalize between -1 and 1
-    def normalize_column(column):
-        return 2 * (column - column.min()) / (column.max() - column.min()) - 1
-
-    # Normalize all columns except the exclude_column
-    df_normalized = df.copy()
-    columns_to_normalize = df.columns.difference([exclude_column])
-    df_normalized[columns_to_normalize] = df[columns_to_normalize].apply(normalize_column)
-    
-    return df_normalized
-
-
 """
 Low filter units: Time constant in seconds
 0.08 sec is roughly equivalent to a 1.9894 Hz cuttoff frequency
@@ -352,61 +310,3 @@ def get_viewer_format_values(raw=None):
     )
 
     return format_dict
-
-
-def bipolar_transverse(raw) :
-    # bipolar-transverse montage electrodes
-    ANODES =    ['F7',
-                'Fp1',
-                'Fp2',
-                'F7',
-                'F3',
-                'Fz',
-                'F4',
-                'T3',
-                'C3',
-                'Cz',
-                'C4',
-                'T5',
-                'P3',
-                'Pz',
-                'P4',
-                'T5',
-                'O1',
-                'O2']
-
-    CATHODES =  ['Fp1',
-                'Fp2',
-                'F8',
-                'F3',
-                'Fz',
-                'F4',
-                'F8',
-                'C3',
-                'Cz',
-                'C4',
-                'T4',
-                'P3',
-                'Pz',
-                'P4',
-                'T6',
-                'O1',
-                'O2',
-                'T6']
-    
-    # change the names of the mne raw channel names (i.e. Fp1-A1A2 -> Fp1)
-    raw.rename_channels(lambda channel: channel.split('-')[0])
-
-    # create bipolar transverse reference (BPT)
-    raw_bpt = mne.set_bipolar_reference(raw, anode=ANODES, cathode=CATHODES)
-
-    # remove irrelevant channels
-    channels =  [channel 
-                 for channel in raw_bpt.info['ch_names'] 
-                 if "-" in channel
-                 ]
-
-    # replace with relevant channels/data
-    raw_bpt.pick_channels(channels)
-
-    return raw_bpt
