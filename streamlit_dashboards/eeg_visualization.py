@@ -8,21 +8,24 @@ from graphs.eeg_viewer import draw_eeg_graph
 
 
 def eeg_visualization_dashboard():
-    if "aev_aea_data" not in st.session_state:
-        st.session_state.aev_df = None
-
-    if "aev_aea_channels" not in st.session_state:
-        st.session_state.aev_channels = None
-
     if "aev_aea_montage" not in st.session_state:
         st.session_state.aev_aea_montage = None
 
     if "aev_aea_fname" not in st.session_state:
-        st.session_state.aev_aea_fname = None
+        st.session_state.aev_aea_fname = ""
+
+    if "aev_montage_data" not in st.session_state:
+        st.session_state.aev_montage_data = None
 
     # Streamlit app setup
-    st.set_page_config(page_title="AEV - AEA", layout="wide")
+    # st.set_page_config(page_title="AEV - AEA", layout="wide")
 
+
+
+    # Check if `mw_object` is available
+if 'mw_object' in st.session_state and st.session_state.mw_object:
+    mw_object = st.session_state.get("mw_object", None)
+    mw_object = mw_object.copy()
 
     # Create a dropdown widget
     curr_montage = st.selectbox(
@@ -30,62 +33,149 @@ def eeg_visualization_dashboard():
         ["a1a2", "cz", "bpt", "tcp", "avg", "ref"],
     )
 
-    # Check if `mw_object` is available
-    if 'mw_object' in st.session_state and st.session_state.mw_object:
-        mw_object = st.session_state.mw_object
-        mw_object = mw_object.copy()
+    # Components
+    with st.container() as row1:
+        st.info(st.session_state.get("fname", "No EEG uploaded..."))
 
-        def get_data(mw_object, curr_montage):
-            eeg_dict = waev.get_data_from_mw_object(mw_object, picks="eeg", get_dict=True)
-            df = eeg_dict[curr_montage]["df"]
-            channels = eeg_dict[curr_montage]["channels"]
-            return df, channels
+        # Create a dropdown widget
+        curr_montage = st.selectbox(
+            "Montage",
+            ["a1a2", "cz", "bpt", "tcp", "avg", "ref"],
+            label_visibility="collapsed",
+        )
 
-
-        # If the montage didnt change, do nothing
-        if st.session_state.get("aev_aea_montage", None) == curr_montage:
-            print(f"MONTAGE IS THE SAME: {st.session_state.get('aev_aea_montage', None)}, {curr_montage}")
+        # gets a dictionary of data for each montage, using session states if the montage is the same as previous
+        def get_data(mw_object, curr_montage, streamlit_set_data=True, normalize_df=True):
+            eeg_dict = waev.get_data_from_mw_object(mw_object, picks="eeg", get_dict=True, resample=64.0, normalize_df=normalize_df)
             
+            if streamlit_set_data:
+                st.session_state.aev_montage_data = eeg_dict
+            else:
+                df = eeg_dict[curr_montage]["df"]
+                channels = eeg_dict[curr_montage]["channels"]
+                return df, channels
+                
         # If the current montage is different than the previous montage
-        elif st.session_state.get("aev_aea_montage", None) != curr_montage:
-            print(f"MONTAGE CHANGED: {st.session_state.get('aev_aea_montage', None)}, {curr_montage}")
-            df, channels = get_data(mw_object, curr_montage)
-            df = waev.normalize_dataframe(df)
+        if (st.session_state.get("aev_aea_montage", None) != curr_montage) or (st.session_state.get("fname", None) != st.session_state.get("aev_aea_fname", None)):            
+            # 
+            if (st.session_state.get("fname", None) != st.session_state.get("aev_aea_fname", None)):
+                get_data(mw_object, curr_montage, normalize_df=True) # df = waev.normalize_dataframe(df)
 
-            st.session_state.aev_aea_df = df
-            st.session_state.aev_aea_channels = channels
+                # Reset the session state
+                st.session_state.saved_onsets_collection = dict(selection=dict(points=[]))
+                st.session_state.aev_aea_fname = st.session_state.get("fname", None)
+            
+            # Set the current montages data for visualization
             st.session_state.aev_aea_montage = curr_montage
-        
+
 
         # Create plot
-        # fig = create_plotly_figure(df, channels, curr_montage)
+        # fig = create_plotly_figure(df, sfreq, channels, curr_montage)
         fig = draw_eeg_graph(
-            st.session_state.get('aev_aea_df', None), 
-            st.session_state.get('aev_aea_channels', None), 
-            st.session_state.get('aev_aea_montage', None),
+            st.session_state.aev_montage_data[curr_montage].get("df", None), 
+            st.session_state.aev_montage_data[curr_montage].get("raw", None).info['sfreq'],
+            st.session_state.aev_montage_data[curr_montage].get("channels", None), 
+            curr_montage,
         )
 
         # Create plotly event
         event = st.plotly_chart(
             fig, 
+            config=dict(
+                scrollZoom=False,
+                displayModeBar=True,
+                displaylogo=False,
+                modeBarButtonsToRemove=['zoom2d', 'pan2d', 'select2d', 'lasso2d', 
+                                        'zoomIn2d', 'zoomOut2d', 'autoScale2d']
+            ),
             use_container_width=True, 
             on_select="rerun",
             selection_mode="points",
+            key="plotly_selection_onsets"
         )
 
-        # Create Streamlit Dataframe
-        st.dataframe(
-            event["selection"]["points"][:],
-            key="aea_collections_df",
+    with st.container() as row2:
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+
+            def save_onsets_button_click():
+                # st.session_state.saved_onsets_collection = st.session_state.get('plotly_selection_onsets',  dict(selection=dict(points=[])))
+                # st.session_state.saved_onsets_collection = st.session_state.get('plotly_selection_onsets',  dict(selection=dict(points=[])))
+
+                print(st.session_state.get('plotly_selection_onsets',  dict(selection=dict(points=[]))))
+            st.button("Save Onsets", type="primary", on_click=save_onsets_button_click)
+
+            def auto_save_onsets():
+                # st.session_state.saved_onsets_collection = 
+                print('Auto saved selected onsets')
+            
+            # Streamlit Dataframe that displays selected onsets from plotly
+            st.dataframe(    # st.data_editor(
+                event["selection"]["points"][:],
+                key="plot_collections_df",
+                # num_rows="dynamic",
+                column_config=dict(
+                    curve_number=None,
+                    point_number=None,
+                    point_index=None,
+                    y=None,
+                    x="     Onsets     "
+                ),
+                # on_change=auto_save_onsets()
+                on_select=auto_save_onsets,
+
+            )
+            # event
+
+    with col2: 
+        # Label for saved data
+        st.markdown("### **Saved Onsets**")
+        
+        def add_to_text_area():
+            # print("RUNNING CALLBACK --- add_to_text_area()")
+            points = st.session_state['saved_onsets_collection']['selection'].get('points', [])
+            # print(f"POINTS: {points}")
+            
+            # extract 'x' values from each point
+            x_values = [point['x'] for point in points if 'x' in point]
+
+            # reformat onsets
+            formatted_onset_list = waev.reformat_timestamps(x_values)
+
+            # list of onsets
+            formatted_onset_string = ', '.join(map(str, formatted_onset_list))
+
+            # create a comma-separated string of 'x' values
+            st.session_state.onset_text_box = formatted_onset_string
+
+
+        # def concat_saving_onsets():
+        #     pass
+        #     st.session_state.get(
+        #         'saved_onsets_collection', dict(selection=dict(points=[]))
+        #     )["selection"]["points"][:]
+
+        # Create Streamlit Dataframe (data editor) 
+        st.data_editor(
+            st.session_state.get('saved_onsets_collection', dict(selection=dict(points=[])))["selection"]["points"][:],
+            key="saved_plot_collections_df",
+            num_rows="dynamic",
             column_config=dict(
                 curve_number=None,
                 point_number=None,
                 point_index=None,
                 y=None,
-                x="     Onset     "
+                x=" Saved Onsets "
             ),
-
+            on_change=add_to_text_area()
         )
+
+    with col3:
+        # Label for saved data
+        st.markdown("### **Listed Saved Onsets**")
+
+        onset_text = st.text_area("loaded from the 'Saved Onsets' table", height=400, key="onset_text_box")
 
 # To run the function as a Streamlit app
 if __name__ == "__main__":
@@ -95,163 +185,3 @@ if __name__ == "__main__":
 
 
 
-### OLD IMPLEMENTATION - 8/16/2024
-
-
-# import time
-
-# import boto3
-# import streamlit as st
-# from botocore.exceptions import NoCredentialsError, PartialCredentialsError
-# from mywaveanalytics.pipelines.abnormality_detection_pipeline import \
-#     SeizureDxPipeline
-
-# from data_models.abnormality_parsers import serialize_aea_to_pandas
-# from graphs.eeg_viewer import draw_eeg_graph
-
-
-# def eeg_visualization_dashboard():
-#     # Set page configuration
-#     # st.set_page_config(page_title="EEG Visualization", layout="wide")
-
-#     # Title
-#     st.title("EEG Visualization Dashboard")
-
-#     if "mw_object" not in st.session_state:
-#         st.error("Please load EEG data")
-#     else:
-#         col1, col2 = st.columns(2)
-
-#         if st.session_state.filename and ("/tmp/" not in st.session_state.filename):
-#             col1.metric("Filename", st.session_state.filename)
-#         elif st.session_state.eeg_id:
-#             col1.metric("EEGId", st.session_state.eeg_id)
-
-#         col2.metric("Recording Date", st.session_state.recording_date)
-
-#         # Check if `mw_object` is available
-#         if "mw_object" in st.session_state and st.session_state.mw_object:
-#             mw_object = st.session_state.mw_object
-#             mw_copy = mw_object.copy()
-
-#             # Reference selection
-#             ref = st.selectbox(
-#                 "Choose EEG Reference",
-#                 options=[
-#                     "linked ears",
-#                     "centroid",
-#                     "bipolar longitudinal",
-#                 ],
-#                 index=0,  # Default to 'linked ears'
-#             )
-
-#             selected_references = {
-#                 "linked ears": "linked_ears",
-#                 "bipolar longitudinal": "bipolar_longitudinal",
-#                 "centroid": "centroid",
-#             }
-
-#             selected_reference = selected_references[ref]
-
-#             # Offset value slider
-#             offset_value = st.slider(
-#                 "Vertical Offset Between Channels",
-#                 min_value=5,
-#                 max_value=700,
-#                 value=100,
-#                 step=5,
-#             )
-
-#             if st.button("AEA Detection"):
-#                 with st.spinner("Running..."):
-#                     mw_object = st.session_state.mw_object
-#                     pipeline = SeizureDxPipeline(
-#                         mw_object.copy(), reference=selected_reference
-#                     )
-#                     pipeline.run()
-#                     analysis_json = pipeline.analysis_json
-
-#                     aea_df = serialize_aea_to_pandas(
-#                         analysis_json, ref=selected_reference
-#                     )
-#                     st.session_state["aea"][selected_reference] = aea_df
-
-#             # Create DataFrame from MyWaveAnalytics object
-#             df = st.session_state.eeg_graph[selected_reference]
-#             if df is not None:
-#                 # Generate the Plotly figure
-#                 with st.spinner("Rendering..."):
-#                     fig = draw_eeg_graph(df, offset_value, selected_reference)
-
-#                     # Display the Plotly figure
-#                     st.plotly_chart(fig, use_container_width=True)
-
-#             # Retrieve ahr from session state
-#             aea = st.session_state.get("aea", None)
-
-#             if aea is not None:
-#                 if not aea[selected_reference].empty:
-#                     st.header("Edit AEA Predictions")
-#                     with st.form("data_editor_form", border=False):
-#                         editable_df = st.session_state.aea[selected_reference].copy()
-#                         editable_df["reviewer"] = st.session_state["user"]
-#                         edited_df = st.data_editor(
-#                             editable_df,
-#                             column_config={
-#                                 "probability": st.column_config.ProgressColumn(
-#                                     "Probability",
-#                                     help="The probability of a seizure occurrence (shown as a percentage)",
-#                                     min_value=0,
-#                                     max_value=1,  # Assuming the probability is normalized between 0 and 1
-#                                 ),
-#                             },
-#                             hide_index=True,
-#                         )
-#                         # Submit button for the form
-#                         submitted = st.form_submit_button("Save Changes")
-
-#                         if submitted:
-#                             # Update the session state with the edited DataFrame
-#                             st.session_state["data"] = edited_df
-#                             st.success("Changes saved successfully!")
-
-#                             try:
-#                                 # Convert DataFrame to CSV and save it locally
-#                                 csv_file_name = f"{st.session_state.eeg_id}"
-#                                 edited_df.to_csv(csv_file_name, index=False)
-
-#                                 # S3 client setup
-#                                 s3 = boto3.client("s3")
-#                                 bucket_name = "lake-superior-prod"
-#                                 file_path = f"eeg-lab/abnormality_bucket/streamlit_validations/aea/{csv_file_name}_{selected_reference}.csv"
-
-#                                 # Adding metadata
-#                                 processed_date = time.time()
-#                                 _ = s3.upload_file(
-#                                     csv_file_name,
-#                                     bucket_name,
-#                                     file_path,
-#                                     ExtraArgs={
-#                                         "Metadata": {
-#                                             "processed_date": str(processed_date),
-#                                             "file_name": csv_file_name,
-#                                         }
-#                                     },
-#                                 )
-#                                 print("File uploaded successfully")
-#                             except NoCredentialsError:
-#                                 st.error("Error: Unable to locate credentials")
-#                             except PartialCredentialsError:
-#                                 st.error("Error: Incomplete credentials provided")
-#                             except Exception as e:
-#                                 st.error(f"Error: {e}")
-
-#         else:
-#             st.error(
-#                 "No EEG data available. Please upload an EEG file on the main page."
-#             )
-
-
-# # To run the function as a Streamlit app
-# if __name__ == "__main__":
-#     eeg_visualization_dashboard()

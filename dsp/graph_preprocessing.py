@@ -1,11 +1,13 @@
 import streamlit as st
 
 from pathlib import Path
-import numpy as np
 import pandas as pd
+import numpy as np
 
-import mne
+from scipy.signal import find_peaks
 from scipy import signal
+import mne
+
 from mywaveanalytics.libraries import mywaveanalytics as mwa
 from mywaveanalytics.libraries import (
     # database,
@@ -24,7 +26,7 @@ from mywaveanalytics.libraries import (
 """
 Load the EEG data from a file
 """
-@st.cache_data
+# @st.cache_data
 def get_data_from_file_path(path, get_dict=False, picks=None):
     ext = str(Path(path).suffix)
 
@@ -55,8 +57,16 @@ def get_data_from_file_path(path, get_dict=False, picks=None):
 Load the EEG data from mwa object
 """
 # @st.cache_data
-def get_data_from_mw_object(mw_object, get_dict=False, picks=None):
+def get_data_from_mw_object(mw_object, get_dict=False, resample=128.0, picks=None, scale_df=False):
+    print(f"Getting data for montages...")
+    apply_waev_filter(
+        mw_object=mw_object, 
+        lowf=None, 
+        highf=None, 
+        default_time_constant=True,
+    )
     raw_mwa = mw_object.eeg
+    
 
     # raw_mwa = apply_waev_filter(raw_mwa, lowf=0.5)
     raw_mwa, _ = apply_fir_filter(
@@ -66,11 +76,11 @@ def get_data_from_mw_object(mw_object, get_dict=False, picks=None):
         filter_eog=False
     )
 
-    raw_mwa = raw_mwa.resample(128.0)
+    raw_mwa = raw_mwa.resample(resample)
     # raw_np = raw.get_data(picks=picks)
 
     if get_dict is True:
-        eeg_dict = get_referenced_data(raw_mwa)
+        eeg_dict = get_referenced_data(raw_mwa, scale_df=scale_df)
         return eeg_dict
     else: 
         return raw_mwa
@@ -79,7 +89,7 @@ def get_data_from_mw_object(mw_object, get_dict=False, picks=None):
 All EEG data needed
 """
 
-def get_referenced_data(raw_mwa=None):
+def get_referenced_data(raw_mwa=None, scale_df=False):
     if raw_mwa is not None:
         raw_a1a2 = order_montage_channels(raw_mwa.copy(), "a1a2")
         raw_cz = order_montage_channels(references.centroid(raw_mwa.copy()), "cz")
@@ -92,42 +102,42 @@ def get_referenced_data(raw_mwa=None):
             a1a2 = dict(
                 raw = raw_a1a2,
                 data = raw_a1a2.get_data(),
-                df = raw_to_df(raw_a1a2),
+                df = scale_dataframe(raw_to_df(raw_a1a2)) if scale_df else raw_to_df(raw_a1a2),
                 channels = raw_a1a2.info["ch_names"],
-                times = raw_a1a2.times
+                times = raw_a1a2.times,
             ),
             cz = dict(
                 raw = raw_cz,
                 data = raw_cz.get_data(),
-                df = raw_to_df(raw_cz),
+                df = scale_dataframe(raw_to_df(raw_cz)) if scale_df else raw_to_df(raw_cz),
                 channels = raw_cz.info["ch_names"],
                 times = raw_cz.times
             ),
             bpt = dict(
                 raw = raw_bpt,
                 data = raw_bpt.get_data(),
-                df = raw_to_df(raw_bpt),
+                df = scale_dataframe(raw_to_df(raw_bpt)) if scale_df else raw_to_df(raw_bpt),
                 channels = raw_bpt.info["ch_names"],
                 times = raw_bpt.times
             ),
             tcp = dict(
                 raw = raw_tcp,
                 data = raw_tcp.get_data(),
-                df = raw_to_df(raw_tcp),
+                df = scale_dataframe(raw_to_df(raw_tcp)) if scale_df else raw_to_df(raw_tcp),
                 channels = raw_tcp.info["ch_names"],
                 times = raw_tcp.times
             ),
             avg = dict(
                 raw = raw_avg,
                 data = raw_avg.get_data(),
-                df = raw_to_df(raw_avg),
+                df = scale_dataframe(raw_to_df(raw_avg)) if scale_df else raw_to_df(raw_avg),
                 channels = raw_avg.info["ch_names"],
                 times = raw_avg.times
             ),
             ref = dict(
                 raw = raw_ref,
                 data = raw_ref.get_data(),
-                df = raw_to_df(raw_ref),
+                df = scale_dataframe(raw_to_df(raw_ref)) if scale_df else raw_to_df(raw_ref),
                 channels = raw_ref.info["ch_names"],
                 times = raw_ref.times
             ),
@@ -154,8 +164,10 @@ def order_montage_channels(raw=None, montage=None):
                         "C3","C4","T3","T4","P3","P4","T5","T6","O1","O2","ECG"]
         new_order_eeg = ["Fz","Cz","Pz","Fp1","Fp2","F3","F4","F7","F8", 
                         "C3","C4","T3","T4","P3","P4","T5","T6","O1","O2"]
-        non_eeg = ["ECG", "A1", "A2"]
+        
         remove_a1a2 = ["A1", "A2"]
+        remove_cz = ["Cz"]
+        non_eeg = ["ECG", "A1", "A2"]
         remove_ecg = ["ECG"]
 
 
@@ -174,21 +186,31 @@ def order_montage_channels(raw=None, montage=None):
         # print(f"changing the labels of {montage} montage...")
         # Modify channel labels so the reference is displayed
         if montage == "a1a2":
-            raw.drop_channels(remove_a1a2)
+            try: 
+                raw.drop_channels(remove_a1a2)
+            except:
+                pass
             old_labels = raw.info["ch_names"]
             new_labels = {
                 old_label: old_label + "-A1A2" for old_label in old_labels
             }
             raw.rename_channels(new_labels)
         elif montage == "cz":
-            raw.drop_channels(remove_a1a2)
+            try: 
+                raw.drop_channels(remove_cz)
+                raw.drop_channels(remove_a1a2)
+            except:
+                pass
             old_labels = raw.info["ch_names"]
             new_labels = {
                 old_label: old_label + "-Cz" for old_label in old_labels
             }
             raw.rename_channels(new_labels)
         elif montage == "avg":
-            raw.drop_channels(remove_a1a2)
+            try: 
+                raw.drop_channels(remove_a1a2)
+            except:
+                pass
             old_labels = raw.info["ch_names"]
             new_labels = {
                 old_label: old_label + "-Avg" for old_label in old_labels
@@ -231,29 +253,93 @@ def raw_to_df(raw=None):
     # Create a DataFrame
     df = pd.DataFrame(data.T, columns=raw.ch_names)
     
-    # Add the time column
-    df['Time'] = times
+    # Add the time columns
+    df['Times'] = times
+    df['Timestamps'] = pd.to_datetime(df["Times"], unit='s').apply(lambda x: x.strftime('%H:%M:%S.%f')[:-3])
     
     # Reorder columns to place 'Time' first
+    # Reorder columns to place 'Times' first and 'Timestamps' second
     cols = df.columns.tolist()
-    cols = ['Time'] + [col for col in cols if col != 'Time']
+    cols = ['Times', 'Timestamps'] + [col for col in cols if col not in ['Times', 'Timestamps']]
     df = df[cols]
     
     return df
 
 
 @st.cache_data
-def normalize_dataframe(df, exclude_column="Time"):
-    # Function to normalize between -1 and 1
-    def normalize_column(column):
-        return 2 * (column - column.min()) / (column.max() - column.min()) - 1
+def scale_dataframe(df):
+    # separate the 'Time' column
+    times_col = df['Times']
+    timestamps_col = df["Timestamps"]
 
-    # Normalize all columns except the exclude_column
-    df_normalized = df.copy()
-    columns_to_normalize = df.columns.difference([exclude_column])
-    df_normalized[columns_to_normalize] = df[columns_to_normalize].apply(normalize_column)
-    
-    return df_normalized
+    # identify ECG and EEG columns
+    try: 
+        ecg_columns = df.filter(like='ECG').columns
+        eeg_columns = df.columns.difference(ecg_columns).difference(['Times', 'Timestamps'])
+    except:
+        eeg_columns = df.columns
+
+    # function to find local maxima and minima
+    def find_extrema(signal):
+        peaks, _ = find_peaks(signal)
+        troughs, _ = find_peaks(-signal)
+        return peaks, troughs
+
+    # Function to return min/max stats for the eeg based on peaks and troughs
+    def get_min_max_stats(columns, df):
+        # calculate the median of maxima and minima for each EEG channel
+        median_max_values = []
+        median_min_values = []
+        mean_max_values = []
+        mean_min_values = []
+
+        # get the peaks and the troughs
+        for col in columns:
+            peaks, troughs = find_extrema(df[col])
+            max_values = df[col].iloc[peaks]
+            min_values = df[col].iloc[troughs]
+            if len(max_values) > 0:
+                median_max_values.append(max_values.median())
+                mean_max_values.append(max_values.mean())
+            if len(min_values) > 0:
+                median_min_values.append(min_values.median())
+                mean_min_values.append(min_values.mean())
+
+        # calculate the max of the above 0 median peaks and the min of the below 0 median troughs
+        median_max = np.max(median_max_values)
+        median_min = np.min(median_min_values)
+        mean_max = np.max(mean_max_values)
+        mean_min = np.min(mean_min_values)
+
+        return median_max, median_min, mean_max, mean_min
+
+    median_max, median_min, mean_max, mean_min = get_min_max_stats(eeg_columns, df)
+
+    # scale the EEG columns
+    df_eeg = df[eeg_columns]
+
+    # new norm: scale to -1, 1 and then adjust it to a percentage of
+    bound = (median_max + abs(median_min)) / 2
+    scaled_eeg = (df_eeg / bound) * 0.1
+
+    try: 
+        # scale ECG column(s) separately
+        median_max, median_min, mean_max, mean_min = get_min_max_stats(ecg_columns, df)
+
+        df_ecg = df[ecg_columns]
+        
+        # new norm: scale to -1, 1 and then adjust it to a percentage of
+        bound = (median_max + abs(median_min)) / 2
+        scaled_ecg = (df_ecg / bound) * 0.05
+
+        # reattach the 'Time' column and combine scaled columns
+        scaled_df = pd.concat([times_col, timestamps_col, scaled_ecg, scaled_eeg], axis=1)
+
+    except:
+        # reattach the 'Time' column and combine scaled columns
+        scaled_df = pd.concat([times_col, timestamps_col, scaled_eeg], axis=1)
+
+    return scaled_df
 
 
 """
@@ -270,11 +356,11 @@ def apply_waev_filter(mw_object=None,
                       ):
     
     if lowf is None and highf is None:
-        print(f"Time constant used: {time_constant}")
+        # print(f"Time constant used: {time_constant}")
         if default_time_constant:
             filters.eeg_filter(mw_object, 1.9894, None)
         else: 
-            raise Exception("Time constant low filter in progress")
+            raise Exception("Time constant low filter in progress (from sec)")
     else:
         filters.eeg_filter(mw_object, lowf, highf) 
 
@@ -326,7 +412,10 @@ def apply_fir_filter(data=[], fs=128.0, cutoff_freq=13, bandwidth=24, numtaps=20
     else:
         raise TypeError("Unsupported data type. Acceptable types: np.ndarray, mne.io.BaseRaw")
 
-
+# Resample the data in an mne raw object
+def eeg_resample(data=None, freq=100): 
+    # data.load_data()
+    return data.resample(freq)
 
 # Function that calculates the power spectrum and associated frequencies for a 1d or 2d array of data
 
@@ -410,3 +499,47 @@ def bipolar_transverse(raw) :
     raw_bpt.pick_channels(channels)
 
     return raw_bpt
+
+
+# take the plot timestamps and make them more readable
+def reformat_timestamps(timestamps):
+    def format_time(ts):
+        if isinstance(ts, str):
+            if ts.startswith('00:'):
+                return ts[3:8]  # Remove "00:" from the start (keep "MM:SS")
+            else:
+                return ts[:8]  # Keep only "HH:MM:SS"
+        else:
+            return ts
+    
+    if isinstance(timestamps, pd.DataFrame):
+        formatted = timestamps.applymap(format_time).stack().unique()
+    elif isinstance(timestamps, np.ndarray):
+        formatted = np.unique(np.vectorize(format_time)(timestamps))
+    elif isinstance(timestamps, list):
+        formatted = sorted(set(format_time(ts) for ts in timestamps))
+    else:
+        raise TypeError("Input must be a DataFrame, NumPy array, or list")
+    
+    return sorted(formatted)
+
+
+#OLD
+# def reformat_timestamps(timestamps):
+#     def format_time(ts):
+#         if isinstance(ts, str):
+#             if ts.startswith('00:'):
+#                 return ts[3:8]  # Remove "00:" from the start
+#             else:
+#                 return ts[:8]  # Keep only "HH:MM:SS"
+#         else:
+#             return ts
+    
+#     if isinstance(timestamps, pd.DataFrame):
+#         return timestamps.applymap(format_time)
+#     elif isinstance(timestamps, np.ndarray):
+#         return np.vectorize(format_time)(timestamps)
+#     elif isinstance(timestamps, list):
+#         return [format_time(ts) for ts in timestamps]
+#     else:
+#         raise TypeError("Input must be a DataFrame, NumPy array, or list")
